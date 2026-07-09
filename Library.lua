@@ -81,6 +81,14 @@
 		guis = {}, 
 		connections = {},   
 		notifications = {},
+		notify_config = {
+			alignment = "Left",
+			bar_side = "Left",
+			position_x = 0,
+			position_y = 40,
+			edge = "Top",
+			side_padding = 20,
+		},
 		playerlist_data = {},
 
 		current_tab, 
@@ -113,6 +121,7 @@
 			["text"] = hex("#F2D7E6"),
 			["text_outline"] = rgb(0, 0, 0),
 			["glow"] = hex("#FF4DA6"), 
+			["unsafe"] = hex("#FF3030"),
 		},
 
 		utility = {
@@ -147,6 +156,9 @@
 			},
 			["low_contrast"] = {
 				["BackgroundColor3"] = {},
+			},
+			["unsafe"] = {
+				["TextColor3"] = {},
 			}
 		}, 
 
@@ -222,23 +234,11 @@
 		makefolder(library.directory .. path)
 	end 
 
-	writefile("ffff.ttf", game:HttpGet("https://github.com/cloudsense-pub/assets/raw/refs/heads/main/fs%20Tahoma%208px.ttf"))
-
-	local tahoma = {
-		name = "SmallestPixel7",
-		faces = {
-			{
-				name = "Regular",
-				weight = 400,
-				style = "normal",
-				assetId = getcustomasset("ffff.ttf")
-			}
-		}
-	}
-
-	writefile("dddd.ttf", http_service:JSONEncode(tahoma))
-
-	library.font = Font.new(getcustomasset("dddd.ttf"), Enum.FontWeight.Regular)
+	pcall(function()
+		if not library.font then
+			library.font = Font.fromEnum(Enum.Font.Code)
+		end
+	end)
 
 	local config_holder 
 -- 
@@ -499,10 +499,15 @@
 		end 
 
 		function library:apply_theme(instance, theme, property) 
+			if not themes.utility[theme] or not themes.utility[theme][property] then return end
 			insert(themes.utility[theme][property], instance)
 		end
 
 		function library:update_theme(theme, color)
+			if not themes.utility[theme] then
+				themes.preset[theme] = color
+				return
+			end
 			for _, property in next, themes.utility[theme] do 
 
 				for m, object in next, property do 
@@ -514,6 +519,55 @@
 
 			themes.preset[theme] = color 
 		end 
+
+		local ATLANTA_GLOW_ASSET = "18245826428"
+
+		function library:sync_menu_glow()
+			local enabled = flags.menu_glow ~= false
+			local opacity = tonumber(flags.glow_opacity) or 20
+			local thickness = tonumber(flags.glow_thickness) or 12.5
+			local transparency = 1 - (clamp(opacity, 0, 100) / 100)
+			local thicknessNorm = clamp(thickness, 0, 100) / 100
+			local pad = floor(40 + thicknessNorm * 24)
+			local offset = -floor(20 + thicknessNorm * 12)
+			local glowColor = themes.preset.glow
+
+			local function applyGlow(desc)
+				if not desc or not desc:IsA("ImageLabel") then return end
+				if desc.ScaleType ~= Enum.ScaleType.Slice then return end
+				if not tostring(desc.Image):find(ATLANTA_GLOW_ASSET, 1, true) then return end
+				desc.Active = false
+				desc.Selectable = false
+				desc.ZIndex = 2
+				desc.ImageColor3 = glowColor
+				if enabled then
+					desc.Visible = true
+					desc.ImageTransparency = transparency
+					desc.Size = dim2(1, pad, 1, pad)
+					desc.Position = dim2(0, offset, 0, offset)
+				else
+					desc.Visible = false
+					desc.ImageTransparency = 1
+				end
+			end
+
+			for _, gui in library.guis do
+				for _, desc in gui:GetDescendants() do
+					applyGlow(desc)
+				end
+			end
+		end
+
+		function library:sync_window_gradients()
+			local enabled = flags.window_gradients ~= false
+			for _, gui in library.guis do
+				for _, desc in gui:GetDescendants() do
+					if desc:IsA("UIGradient") then
+						desc.Enabled = enabled
+					end
+				end
+			end
+		end
 
 		function library:connection(signal, callback)
 			local connection = signal:Connect(callback)
@@ -601,7 +655,7 @@
 				local UIGradient = library:create("UIGradient", {
 					Parent = watermark_background,
 					Name = "",
-					Color = rgbseq{rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))}
+					Color = rgbseq{rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)}
 				}); library:apply_theme(UIGradient, "contrast", "Color")
 				
 				local text = library:create("TextLabel", {
@@ -739,7 +793,7 @@
 						Name = "",
 						Rotation = 90,
 						Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 					})
 		
@@ -813,7 +867,7 @@
 						Name = "",
 						Rotation = 90,
 						Color = rgbseq{
-							rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+							rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 						}
 					})
 					
@@ -922,6 +976,10 @@
 			items.button.MouseButton1Click:Connect(function()
 				items.sgui.Enabled = not items.sgui.Enabled
 			end)
+
+			task.defer(function()
+				pcall(function() library:sync_menu_glow() end)
+			end)
 			
 			return setmetatable(cfg, library)
 		end 
@@ -940,6 +998,91 @@
 			DisplayOrder = 999999, 
 			ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 		})
+
+		local notif_area = library:create("Frame", {
+			Parent = notif_holder,
+			Name = "",
+			BackgroundTransparency = 1,
+			Position = dim2(0, 0, 0, 40),
+			Size = dim2(0, 300, 1, -40),
+			ZIndex = 100,
+		})
+
+		local notif_layout = library:create("UIListLayout", {
+			Parent = notif_area,
+			Padding = dim(0, 4),
+			FillDirection = Enum.FillDirection.Vertical,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		})
+
+		library.notif_area = notif_area
+		library.notif_layout = notif_layout
+
+		function library:sync_notif_alignment()
+			local cfg = library.notify_config
+			local pos = flags["notif_position"] or "Top Left"
+
+			if pos == "Top Center" then
+				cfg.alignment = "Center"
+				cfg.edge = "Top"
+			elseif pos == "Top Right" then
+				cfg.alignment = "Right"
+				cfg.edge = "Top"
+			elseif pos == "Bottom Left" then
+				cfg.alignment = "Left"
+				cfg.edge = "Bottom"
+			elseif pos == "Bottom Center" then
+				cfg.alignment = "Center"
+				cfg.edge = "Bottom"
+			elseif pos == "Bottom Right" then
+				cfg.alignment = "Right"
+				cfg.edge = "Bottom"
+			else
+				cfg.alignment = "Left"
+				cfg.edge = "Top"
+			end
+
+			local y = cfg.position_y
+			local pad = cfg.side_padding
+
+			if cfg.edge == "Top" then
+				if cfg.alignment == "Center" then
+					notif_area.AnchorPoint = vec2(0.5, 0)
+					notif_area.Position = dim2(0.5, 0, 0, y)
+				elseif cfg.alignment == "Right" then
+					notif_area.AnchorPoint = vec2(1, 0)
+					notif_area.Position = dim2(1, -pad, 0, y)
+				else
+					notif_area.AnchorPoint = vec2(0, 0)
+					notif_area.Position = dim2(0, pad, 0, y)
+				end
+				notif_area.Size = dim2(0, 300, 1, -y)
+				notif_layout.VerticalAlignment = Enum.VerticalAlignment.Top
+			else
+				if cfg.alignment == "Center" then
+					notif_area.AnchorPoint = vec2(0.5, 1)
+					notif_area.Position = dim2(0.5, 0, 1, -y)
+				elseif cfg.alignment == "Right" then
+					notif_area.AnchorPoint = vec2(1, 1)
+					notif_area.Position = dim2(1, -pad, 1, -y)
+				else
+					notif_area.AnchorPoint = vec2(0, 1)
+					notif_area.Position = dim2(0, pad, 1, -y)
+				end
+				notif_area.Size = dim2(0, 300, 1, -y)
+				notif_layout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+			end
+
+			if cfg.alignment == "Left" then
+				notif_layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+			elseif cfg.alignment == "Right" then
+				notif_layout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+			else
+				notif_layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+			end
+		end
+
+		library:sync_notif_alignment()
 
 		function library:fold_elements(origin, elements)
 			for _, x in next, elements do 
@@ -1226,6 +1369,7 @@
 			local window = {opened = true}            
 			local opened = {}
 			local dock_outline;
+			local menu_cursor_active = false
 			local blur = library:create( "BlurEffect" , {
 				Parent = lighting;
 				Enabled = true;
@@ -1237,6 +1381,66 @@
 				Parent = gethui(),
 				Name = "" 
 			})
+
+			local function sync_menu_cursor(force_enabled)
+				local want_ptr = force_enabled
+				if want_ptr == nil then
+					want_ptr = flags["pointer_design"] ~= false
+				end
+
+				if not (window.opened and want_ptr) then
+					if window.opened and not want_ptr then
+						uis.MouseIconEnabled = true
+					end
+					return
+				end
+
+				if menu_cursor_active or not Drawing or type(Drawing.new) ~= "function" then
+					if not Drawing then
+						uis.MouseIconEnabled = true
+					end
+					return
+				end
+
+				task.spawn(function()
+					menu_cursor_active = true
+					local saved_icon = uis.MouseIconEnabled
+
+					local cursor = Drawing.new("Triangle")
+					cursor.Thickness = 1
+					cursor.Filled = true
+					cursor.Visible = true
+
+					local cursor_outline = Drawing.new("Triangle")
+					cursor_outline.Thickness = 1
+					cursor_outline.Filled = false
+					cursor_outline.Color = rgb(0, 0, 0)
+					cursor_outline.Visible = true
+
+					while window.opened and sgui.Parent and flags["pointer_design"] ~= false do
+						uis.MouseIconEnabled = false
+
+						local m_pos = uis:GetMouseLocation()
+						cursor.Color = themes.preset.accent
+
+						cursor.PointA = vec2(m_pos.X, m_pos.Y)
+						cursor.PointB = vec2(m_pos.X + 16, m_pos.Y + 6)
+						cursor.PointC = vec2(m_pos.X + 6, m_pos.Y + 16)
+						cursor_outline.PointA = cursor.PointA
+						cursor_outline.PointB = cursor.PointB
+						cursor_outline.PointC = cursor.PointC
+
+						run.RenderStepped:Wait()
+					end
+
+					uis.MouseIconEnabled = saved_icon
+					pcall(function() cursor:Remove() end)
+					pcall(function() cursor_outline:Remove() end)
+					menu_cursor_active = false
+				end)
+			end
+
+			library.sync_menu_cursor = sync_menu_cursor
 
 			function window.set_menu_visibility(bool) 
 				window.opened = bool 
@@ -1272,6 +1476,10 @@
 					library.current_element_open.set_visible(false)
 					library.current_element_open.open = false 
 					library.current_element_open = nil 
+				end
+
+				if bool then
+					sync_menu_cursor()
 				end
 			end 
 
@@ -1364,7 +1572,7 @@
 					Name = "",
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				}) library:apply_theme(UIGradient, "contrast", "Color") 
 			-- 
@@ -1612,7 +1820,7 @@
 					Parent = background,
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				})
 				
@@ -1682,23 +1890,36 @@
 				section:label({name = "Glow"})
 				:colorpicker({name = "Glow", color = themes.preset.glow, callback = function(color, alpha)
 					library:update_theme("glow", color)
+					library:sync_menu_glow()
 				end, flag = "Glow"})
 				section:toggle({name = "Menu Glow", flag = "menu_glow", default = true, callback = function(bool)
-					if style and style.items and style.items.glow then
-						style.items.glow.Visible = bool == true
-					end
 					library.flags["menu_glow"] = bool == true
+					library:sync_menu_glow()
 				end})
 				section:slider({name = "Glow Opacity", flag = "glow_opacity", min = 0, max = 100, default = 20, interval = 1, suffix = "%", callback = function(int)
-					if style and style.items and style.items.glow then
-						style.items.glow.ImageTransparency = 1 - (math.clamp(tonumber(int) or 20, 0, 100) / 100)
-					end
+					library:sync_menu_glow()
 				end})
 				section:slider({name = "Blur Size", flag = "Blur Size", min = 0, max = 56, default = 15, interval = 1, callback = function(int)
 					blur.Size = window.opened and (tonumber(int) or 0) or 0
 				end})
-				section:dropdown({name = "Notification Position", flag = "notif_position", items = {"Top Left", "Top Right", "Bottom Left", "Bottom Right"}, default = "Top Left", callback = function()
+				section:dropdown({name = "Notification Position", flag = "notif_position", items = {"Top Left", "Top Center", "Top Right", "Bottom Left", "Bottom Center", "Bottom Right"}, default = "Top Left", callback = function()
+					library:sync_notif_alignment()
 					library:refresh_notifications()
+				end})
+				section:toggle({name = "Pointer Design", flag = "pointer_design", default = true, callback = function()
+					sync_menu_cursor()
+				end})
+				section:toggle({name = "Hover Highlight", flag = "hover_highlight", default = true})
+				section:toggle({name = "Window Gradients", flag = "window_gradients", default = true, callback = function()
+					library:sync_window_gradients()
+				end})
+				section:slider({name = "Glow Thickness", flag = "glow_thickness", min = 0, max = 100, default = 12.5, interval = 0.5, callback = function()
+					library:sync_menu_glow()
+				end})
+				section:label({name = "Unsafe"})
+				:colorpicker({name = "Unsafe", color = hex("#FF3030"), flag = "unsafe_color", callback = function(color)
+					themes.preset.unsafe = color
+					pcall(function() library:update_theme("unsafe", color) end)
 				end})
 				local section = column:section({name = "Other"})
 				section:label({name = "UI Bind"})
@@ -1766,12 +1987,12 @@
 					end})
 					section:button_holder({})
 					section:button({name = "Load", callback = function()
- library:confirmation({title = "Confirmation", text = "Load Config?", callback = function(ok)
-  if not ok then return end
-  library:load_config(readfile(library.directory .. "/configs/" .. flags["config_name_list"] .. ".cfg"))
-  library:notification({text = "Loaded Config: " .. flags["config_name_list"], time = 3})
- end})
- end})
+						library:confirmation({title = "Confirmation", text = "Load Config?", callback = function(ok)
+							if not ok then return end
+							library:load_config(readfile(library.directory .. "/configs/" .. flags["config_name_list"] .. ".cfg"))
+							library:notification({text = "Loaded Config: " .. flags["config_name_list"], time = 3})
+						end})
+					end})
 					section:button({name = "Save", callback = function()
 						writefile(library.directory .. "/configs/" .. flags["config_name_list"] .. ".cfg", library:get_config())
 						library:config_list_update()
@@ -1787,15 +2008,8 @@
 					end})
 					section:button({name = "Unload Menu", callback = function()
 						library:load_config(library.old_config)
-
-						for _, gui in library.guis do 
-							gui:Destroy() 
-						end 
-
-						for _, connection in library.connections do 
-							connection:Disconnect() 
-						end
-
+						for _, gui in library.guis do gui:Destroy() end
+						for _, connection in library.connections do connection:Disconnect() end
 						blur:Destroy()
 					end})
 			-- 
@@ -1833,6 +2047,11 @@
 					library.prioritize(text)
 				end})
 			--  
+
+			task.defer(function()
+				pcall(function() library:sync_menu_glow() end)
+				pcall(function() library:sync_window_gradients() end)
+			end)
 
 			return setmetatable(window, library)
 		end
@@ -1881,7 +2100,7 @@
 				Name = "",
 				Rotation = 90,
 				Color = rgbseq{
-					rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+					rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 				}
 			}) library:apply_theme(UIGradient, "contrast", "Color") 
 			
@@ -1945,9 +2164,17 @@
 		function library:esp_preview(properties)
 			local cfg = {items = {}, rotation = 0; objects = {};}
 
+			if not lp.Character then return setmetatable(cfg, library) end
 			lp.Character.Archivable = true
 			local character = lp.Character:Clone()
-			character.Animate:Destroy()
+			local __okc_anim = character:FindFirstChild("Animate")
+			if __okc_anim then __okc_anim:Destroy() end
+			if not character.PrimaryPart then
+				character.PrimaryPart = character:FindFirstChild("HumanoidRootPart")
+					or character:FindFirstChild("Torso")
+					or character:FindFirstChild("UpperTorso")
+					or character:FindFirstChildWhichIsA("BasePart", true)
+			end
 
 			local items = cfg.items; do 
 				items.viewportframe = library:create( "ViewportFrame" , {
@@ -1978,7 +2205,9 @@
 				library:connection(run.RenderStepped, function()
 					task.wait()
 					cfg.rotation += 0.5
-					character:SetPrimaryPartCFrame(cfr(Vector3.new(0, 1, -6)) * angle(0, math.rad(cfg.rotation), 0))
+					pcall(function()
+						character:SetPrimaryPartCFrame(cfr(Vector3.new(0, 1, -6)) * angle(0, math.rad(cfg.rotation), 0))
+					end)
 				end)
 			end 
 
@@ -2003,7 +2232,7 @@
 				objects[ "name" ] = library:create( "TextLabel" , {
 					FontFace = library.font;
 					Parent = library.cache;
-					TextColor3 = flags["Name_Color"].Color;
+					TextColor3 = (flags["Name_Color"] and flags["Name_Color"].Color) or themes.preset.text;
 					BorderColor3 = rgb(0, 0, 0);
 					Text = string.format("%s (@%s)", lp.DisplayName, lp.Name);
 					Name = "\0";
@@ -2356,10 +2585,24 @@
 			return setmetatable(cfg, library)
 		end
 
-		function library:refresh_notifications()  	
-			for _, notif in next, library.notifications do 
-				tween_service:Create(notif, TweenInfo.new(0.3, Enum.EasingStyle.Exponential, Enum.EasingDirection.InOut), {Position = dim2(0, 20, 0, 72 + (_ * 28))}):Play()
-			end     
+		function library:refresh_notifications()
+			library:sync_notif_alignment()
+			local align = library.notify_config.alignment
+			for i, notif in next, library.notifications do
+				if notif and notif.Parent then
+					notif.LayoutOrder = i
+					if align == "Center" then
+						notif.AnchorPoint = vec2(0.5, 0)
+						notif.Position = dim2(0.5, 0, 0, 0)
+					elseif align == "Right" then
+						notif.AnchorPoint = vec2(1, 0)
+						notif.Position = dim2(1, 0, 0, 0)
+					else
+						notif.AnchorPoint = vec2(0, 0)
+						notif.Position = dim2(0, 0, 0, 0)
+					end
+				end
+			end
 		end
 
 		
@@ -2406,6 +2649,25 @@
 				ZIndex = 52,
 			})
 			library:apply_theme(bg, "low_contrast", "BackgroundColor3")
+
+			local confirm_accent_bar = library:create("Frame", {
+				Parent = bg,
+				BorderSizePixel = 0,
+				Size = dim2(1, 0, 0, 2),
+				BackgroundColor3 = themes.preset.accent,
+				ZIndex = 53,
+			})
+			library:apply_theme(confirm_accent_bar, "accent", "BackgroundColor3")
+
+			local confirm_grad = library:create("UIGradient", {
+				Parent = bg,
+				Rotation = 90,
+				Color = rgbseq{
+					rgbkey(0, themes.preset.low_contrast),
+					rgbkey(1, themes.preset.high_contrast),
+				},
+			})
+			library:apply_theme(confirm_grad, "contrast", "Color")
 
 			local title = library:create("TextLabel", {
 				Parent = bg,
@@ -2562,33 +2824,28 @@ function library:notification(properties)
 			}
 		
 			-- Instances
+				local align = library.notify_config.alignment
+				local outer_anchor = vec2(0, 0)
+				local outer_pos = dim2(0, 0, 0, 0)
+				if align == "Center" then
+					outer_anchor = vec2(0.5, 0)
+					outer_pos = dim2(0.5, 0, 0, 0)
+				elseif align == "Right" then
+					outer_anchor = vec2(1, 0)
+					outer_pos = dim2(1, 0, 0, 0)
+				end
+
 				local watermark_outline = library:create("Frame", {
-					Parent = notif_holder,
+					Parent = notif_area,
 					Name = "",
 					Size = UDim2.new(0, 0, 0, 24),
 					BorderColor3 = rgb(0, 0, 0),
 					BorderSizePixel = 0,
-					Position = (function()
-					local pos = (flags["notif_position"] or "Top Left")
-					local stack = (#library.notifications * 28)
-					if pos == "Top Right" then
-						return UDim2.new(1, -20, 0, 72 + stack)
-					elseif pos == "Bottom Left" then
-						return UDim2.new(0, 20, 1, -(72 + stack))
-					elseif pos == "Bottom Right" then
-						return UDim2.new(1, -20, 1, -(72 + stack))
-					end
-					return UDim2.new(0, 20, 0, 72 + stack)
-				end)(),
+					Position = outer_pos,
 					AutomaticSize = Enum.AutomaticSize.X,
 					BackgroundColor3 = themes.preset.outline,
-					AnchorPoint = (function()
-						local pos = (flags["notif_position"] or "Top Left")
-						if pos == "Top Right" then return Vector2.new(1, 0) end
-						if pos == "Bottom Left" then return Vector2.new(0, 1) end
-						if pos == "Bottom Right" then return Vector2.new(1, 1) end
-						return Vector2.new(0, 0)
-					end)()
+					AnchorPoint = outer_anchor,
+					LayoutOrder = #library.notifications + 1,
 				})
 			
 				local watermark_inline = library:create("Frame", {
@@ -2760,7 +3017,7 @@ function library:notification(properties)
 				local UIGradient = library:create("UIGradient", {
 					Parent = background,
 					Rotation = 90,
-					Color = rgbseq{rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))}
+					Color = rgbseq{rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)}
 				}) library:apply_theme(UIGradient, "contrast", "Color") 
 
 				local text = library:create("TextLabel", {
@@ -2866,6 +3123,267 @@ function library:notification(properties)
 			return setmetatable(cfg, library) 
 		end
 
+		function library:dependency_box()
+			local cfg = {
+				holder = nil,
+				_visibilityRoot = nil,
+			}
+
+			local dep = library:create("Frame", {
+				Parent = self.holder,
+				Name = "\0dep",
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Size = dim2(1, -8, 0, 0),
+				AutomaticSize = Enum.AutomaticSize.Y,
+				BorderColor3 = rgb(0, 0, 0),
+				BackgroundColor3 = rgb(255, 255, 255),
+			})
+			cfg._visibilityRoot = dep
+
+			local accent = library:create("Frame", {
+				Parent = dep,
+				Name = "\0dep_accent",
+				BackgroundColor3 = themes.preset.outline,
+				BorderSizePixel = 0,
+				Size = dim2(0, 1, 1, 0),
+			})
+			library:apply_theme(accent, "outline", "BackgroundColor3")
+
+			library:create("UIPadding", {
+				Parent = dep,
+				PaddingTop = dim(0, 2),
+				PaddingBottom = dim(0, 2),
+				PaddingLeft = dim(0, 8),
+				PaddingRight = dim(0, 4),
+			})
+
+			library:create("UIListLayout", {
+				Parent = dep,
+				Padding = dim(0, 4),
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			})
+
+			cfg.holder = dep
+			return setmetatable(cfg, library)
+		end
+
+		function library:tabbox()
+			local cfg = {
+				pages = {},
+				current = nil,
+			}
+
+			local section = library:create("Frame", {
+				Parent = self.holder,
+				Name = "\0tabbox",
+				BorderColor3 = rgb(0, 0, 0),
+				Size = dim2(1, 0, 1, 0),
+				BorderSizePixel = 0,
+				BackgroundColor3 = themes.preset.inline,
+			})
+			library:apply_theme(section, "inline", "BackgroundColor3")
+
+			local inline = library:create("Frame", {
+				Parent = section,
+				Name = "",
+				Position = dim2(0, 1, 0, 1),
+				BorderColor3 = rgb(0, 0, 0),
+				Size = dim2(1, -2, 1, -2),
+				BorderSizePixel = 0,
+				BackgroundColor3 = themes.preset.outline,
+			})
+			library:apply_theme(inline, "outline", "BackgroundColor3")
+
+			local background = library:create("Frame", {
+				Parent = inline,
+				Name = "",
+				ClipsDescendants = true,
+				Position = dim2(0, 1, 0, 1),
+				BorderColor3 = rgb(0, 0, 0),
+				Size = dim2(1, -2, 1, -2),
+				BorderSizePixel = 0,
+				ZIndex = 1,
+				BackgroundColor3 = rgb(255, 255, 255),
+			})
+
+			local accent = library:create("Frame", {
+				Parent = background,
+				Name = "",
+				Size = dim2(1, 0, 0, 2),
+				BorderColor3 = rgb(0, 0, 0),
+				ZIndex = 3,
+				BorderSizePixel = 0,
+				BackgroundColor3 = themes.preset.accent,
+			})
+			library:apply_theme(accent, "accent", "BackgroundColor3")
+
+			local UIGradient = library:create("UIGradient", {
+				Parent = background,
+				Name = "",
+				Rotation = 90,
+				Color = rgbseq{rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)},
+			})
+			library:apply_theme(UIGradient, "contrast", "Color")
+
+			local tab_holder = library:create("Frame", {
+				Parent = background,
+				Name = "",
+				ClipsDescendants = true,
+				BackgroundTransparency = 1,
+				Position = dim2(0, -1, 0, 0),
+				BorderColor3 = rgb(0, 0, 0),
+				Size = dim2(1, 2, 0, 21),
+				BorderSizePixel = 0,
+				BackgroundColor3 = rgb(255, 255, 255),
+			})
+
+			library:create("UIListLayout", {
+				Parent = tab_holder,
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalFlex = Enum.UIFlexAlignment.Fill,
+				Padding = dim(0, -3),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			})
+
+			local function select_page(page)
+				cfg.current = page
+				for _, p in ipairs(cfg.pages) do
+					local on = p == page
+					p.scroll.Visible = on
+					p.button.Size = dim2(0, 0, 1, on and 1 or 0)
+					p.gradient.Rotation = on and -90 or 90
+					p.label.TextColor3 = on and themes.preset.accent or themes.preset.text
+				end
+			end
+
+			function cfg.add_tab(_, name)
+				local tabb = library:create("TextButton", {
+					Parent = tab_holder,
+					Name = "",
+					AutoButtonColor = false,
+					FontFace = library.font,
+					TextColor3 = themes.preset.text,
+					BorderColor3 = rgb(0, 0, 0),
+					Text = "",
+					BorderSizePixel = 0,
+					Size = dim2(0, 0, 1, 0),
+					ZIndex = 1,
+					TextSize = 12,
+					BackgroundColor3 = themes.preset.outline,
+				})
+				library:apply_theme(tabb, "outline", "BackgroundColor3")
+
+				local tab_bg = library:create("Frame", {
+					Parent = tabb,
+					Name = "",
+					Size = dim2(1, 0, 1, -2),
+					Position = dim2(0, 1, 0, 1),
+					BorderColor3 = rgb(0, 0, 0),
+					ZIndex = 1,
+					BorderSizePixel = 0,
+					BackgroundColor3 = rgb(255, 255, 255),
+				})
+
+				local tab_grad = library:create("UIGradient", {
+					Parent = tab_bg,
+					Name = "",
+					Rotation = 90,
+					Color = rgbseq{rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)},
+				})
+				library:apply_theme(tab_grad, "contrast", "Color")
+
+				local text = library:create("TextLabel", {
+					Parent = tab_bg,
+					Name = "",
+					FontFace = library.font,
+					TextColor3 = themes.preset.text,
+					BorderColor3 = rgb(0, 0, 0),
+					Text = tostring(name or "Tab"),
+					BackgroundTransparency = 1,
+					Size = dim2(1, 0, 1, 0),
+					BorderSizePixel = 0,
+					AutomaticSize = Enum.AutomaticSize.X,
+					TextSize = 12,
+					BackgroundColor3 = rgb(255, 255, 255),
+				})
+				library:apply_theme(text, "accent", "TextColor3")
+
+				library:create("UIStroke", {
+					Parent = text,
+					Name = "",
+					LineJoinMode = Enum.LineJoinMode.Miter,
+				})
+
+				local scroll = library:create("ScrollingFrame", {
+					Parent = background,
+					Name = "",
+					ScrollBarImageColor3 = themes.preset.accent,
+					Active = true,
+					MidImage = "rbxassetid://103468666327206",
+					TopImage = "rbxassetid://103468666327206",
+					BottomImage = "rbxassetid://103468666327206",
+					AutomaticCanvasSize = Enum.AutomaticSize.Y,
+					ScrollBarThickness = 2,
+					Size = dim2(1, 0, 1, -24),
+					Visible = false,
+					BackgroundTransparency = 1,
+					Position = dim2(0, 0, 0, 28),
+					BackgroundColor3 = rgb(255, 255, 255),
+					BorderColor3 = rgb(0, 0, 0),
+					BorderSizePixel = 0,
+					CanvasSize = dim2(0, 0, 0, 0),
+				})
+				library:apply_theme(scroll, "accent", "ScrollBarImageColor3")
+
+				local elements = library:create("Frame", {
+					Parent = scroll,
+					Name = "",
+					BackgroundTransparency = 1,
+					BorderColor3 = rgb(0, 0, 0),
+					Size = dim2(1, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+					BorderSizePixel = 0,
+					BackgroundColor3 = rgb(255, 255, 255),
+				})
+
+				library:create("UIListLayout", {
+					Parent = elements,
+					SortOrder = Enum.SortOrder.LayoutOrder,
+					HorizontalAlignment = Enum.HorizontalAlignment.Center,
+					Padding = dim(0, 4),
+				})
+
+				library:create("UIPadding", {
+					Parent = scroll,
+					PaddingTop = dim(0, 8),
+					PaddingBottom = dim(0, 10),
+				})
+
+				local page = {
+					button = tabb,
+					gradient = tab_grad,
+					label = text,
+					scroll = scroll,
+				}
+				insert(cfg.pages, page)
+
+				library:connection(tabb.MouseButton1Click, function()
+					select_page(page)
+				end)
+
+				if #cfg.pages == 1 then
+					select_page(page)
+				end
+
+				return setmetatable({ holder = elements, name = name }, library)
+			end
+
+			cfg.holder = section
+			return setmetatable(cfg, library)
+		end
+
 		function library:multi_section(options)
 			local cfg = {
 				names = options.names or {"First", "Second", "Third"}, 
@@ -2924,7 +3442,7 @@ function library:notification(properties)
 				Parent = __background,
 				Name = "",
 				Rotation = 90,
-				Color = rgbseq{rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))}
+				Color = rgbseq{rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)}
 			}) library:apply_theme(UIGradient, "contrast", "Color") 
 			
 			local tab_holder = library:create("Frame", {
@@ -2984,7 +3502,7 @@ function library:notification(properties)
 						Parent = background,
 						Name = "",
 						Rotation = 90,
-						Color = rgbseq{rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))}
+						Color = rgbseq{rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)}
 					}) library:apply_theme(UIGradient, "contrast", "Color")
 					
 					local text = library:create("TextLabel", {
@@ -3160,7 +3678,7 @@ function library:notification(properties)
 				Parent = background,
 				Rotation = 90,
 				Color = rgbseq{
-					rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+					rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 				}
 			}) library:apply_theme(UIGradient, "contrast", "Color") 
 
@@ -3382,7 +3900,7 @@ function library:notification(properties)
 					Parent = contrast,
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				}); library:apply_theme(UIGradient, "contrast", "Color")
 				
@@ -3470,6 +3988,7 @@ function library:notification(properties)
 				colorpicker = options.color or nil,
 				visible = options.visible or true,
 				tooltip = options.tooltip or nil,
+				unsafe = options.unsafe or nil,
 			}
 
 			-- instances
@@ -3546,6 +4065,11 @@ function library:notification(properties)
 					Parent = text,
 					LineJoinMode = Enum.LineJoinMode.Miter
 				})
+
+				if cfg.unsafe then
+					text.TextColor3 = themes.preset.unsafe or rgb(255, 48, 48)
+					library:apply_theme(text, "unsafe", "TextColor3")
+				end
 			
 				library:create("UIListLayout", {
 					Parent = left_components,
@@ -3618,7 +4142,7 @@ function library:notification(properties)
 					Rotation = 90,
 					Name = "_",
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				}) library:apply_theme(UIGradient, "contrast", "Color") 
 			--  
@@ -3767,7 +4291,7 @@ function library:notification(properties)
 					Rotation = 90,
 					Name = "_",
 					Color = rgbseq{
-					rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+					rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 				}
 				}) library:apply_theme(UIGradient, "contrast", "Color") 
 				
@@ -3866,7 +4390,7 @@ function library:notification(properties)
 					Rotation = 90,
 					Name = "_",
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				}) library:apply_theme(UIGradient, "contrast", "Color") 
 				
@@ -4330,7 +4854,7 @@ function library:notification(properties)
 				Name = "",
 				Rotation = 90,
 				Color = rgbseq{
-					rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+					rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 				}
 			}); library:apply_theme(UIGradient, "contrast", "Color") 
 			
@@ -4454,7 +4978,7 @@ function library:notification(properties)
 					Name = "",
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				}); library:apply_theme(UIGradient, "contrast", "Color")
 				
@@ -4862,7 +5386,7 @@ function library:notification(properties)
 					Parent = contrast,
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				}) library:apply_theme(UIGradient, "contrast", "Color") 
 				
@@ -4968,7 +5492,7 @@ function library:notification(properties)
 					Parent = contrast,
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				}) library:apply_theme(UIGradient, "contrast", "Color") 
 			
@@ -5228,7 +5752,7 @@ function library:notification(properties)
 					Name = "",
 					Rotation = 90,
 					Color = rgbseq{
-					rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+					rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 				}
 				}) library:apply_theme(UIGradient, "contrast", "Color") 
 				
@@ -5479,7 +6003,7 @@ function library:notification(properties)
 					Name = "",
 					Rotation = 90,
 					Color = rgbseq{
-						rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+						rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 					}
 				})
 				
@@ -5649,7 +6173,7 @@ function library:notification(properties)
 				Name = "",
 				Rotation = 90,
 				Color = rgbseq{
-					rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+					rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 				}
 			})
 			
@@ -5891,7 +6415,7 @@ function library:notification(properties)
 					Name = "",
 					Rotation = 90,
 					Color = rgbseq{
-					rgbkey(0, rgb(42, 16, 28)), rgbkey(1, rgb(28, 10, 18))
+					rgbkey(0, themes.preset.high_contrast), rgbkey(1, themes.preset.low_contrast)
 				}
 				}); library:apply_theme(UIGradient, "contrast", "Color") 
 				
