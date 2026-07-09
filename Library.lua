@@ -2816,7 +2816,7 @@
 			close.MouseButton1Click:Connect(function() finish(false) end)
 		end
 
-function library:notification(properties)
+		function library:notification(properties)
 			local cfg = {
 				time = properties.time or 5,
 				text = properties.text or properties.name or "Notification",
@@ -2967,8 +2967,8 @@ function library:notification(properties)
 				task.wait(1)
 
 				watermark_outline:Destroy()
-			end)    
-		end 
+			end)
+		end
 
 		function library:tab(options)	
 			local cfg = {
